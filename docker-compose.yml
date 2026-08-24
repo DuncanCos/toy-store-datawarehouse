@@ -10,6 +10,13 @@ x-minio-env: &minio-env
   MINIO_ACCESS_KEY: minioadmin
   MINIO_SECRET_KEY: minioadmin
 
+x-postgres-env: &postgres-env
+  POSTGRES_HOST: postgres
+  POSTGRES_PORT: "5432"
+  POSTGRES_DB: warehouse
+  POSTGRES_USER: warehouse
+  POSTGRES_PASSWORD: warehouse
+
 services:
   minio:
     image: minio/minio:latest
@@ -44,13 +51,32 @@ services:
       exit 0
       "
 
+  postgres:
+    image: postgres:16-alpine
+    container_name: toystore-postgres
+    environment:
+      POSTGRES_DB: warehouse
+      POSTGRES_USER: warehouse
+      POSTGRES_PASSWORD: warehouse
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # Creates the silver/gold schemas on first boot.
+      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U warehouse -d warehouse"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+
   spark-master:
     <<: *spark-image
     container_name: toystore-spark-master
     user: root
     command: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.master.Master", "--host", "spark-master"]
     environment:
-      <<: *minio-env
+      <<: [*minio-env, *postgres-env]
     ports:
       - "8081:8080"
       - "7077:7077"
@@ -66,7 +92,7 @@ services:
     user: root
     command: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.worker.Worker", "spark://spark-master:7077"]
     environment:
-      <<: *minio-env
+      <<: [*minio-env, *postgres-env]
       SPARK_WORKER_MEMORY: 2g
       SPARK_WORKER_CORES: 2
     depends_on:
@@ -83,8 +109,10 @@ services:
         condition: service_healthy
       minio-init:
         condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
     environment:
-      <<: *minio-env
+      <<: [*minio-env, *postgres-env]
       SPARK_MASTER_URL: spark://spark-master:7077
       # Raw CSVs are read from the host only once, by the bronze ingestion.
       # Every layer after that reads and writes s3a:// paths on MinIO.
@@ -92,8 +120,6 @@ services:
       BRONZE_URI: s3a://bronze/toy_store/raw
       SILVER_URI: s3a://silver/toy_store
       GOLD_URI: s3a://gold/toy_store
-      GOLD_BUCKET: gold
-      GOLD_CSV_PREFIX: toy_store/csv
       OUTPUT_DIR: /opt/output
     volumes:
       - ${DATA_PATH:-./data/raw}:/opt/spark-data/raw:ro
@@ -104,3 +130,4 @@ services:
 
 volumes:
   minio_data:
+  postgres_data:

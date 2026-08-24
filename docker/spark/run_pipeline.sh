@@ -11,8 +11,8 @@ until curl -sf "http://spark-master:8080" > /dev/null; do
 done
 echo "[wait] spark-master is up."
 
-# Shared helper module, shipped to the executors alongside each job.
-PY_DEPS="/app/src/spark_session.py"
+# Shared helper modules, shipped to the executors alongside each job.
+PY_DEPS="/app/src/spark_session.py,/app/src/storage.py,/app/src/warehouse.py"
 SUBMIT_OPTS=(
   --master "${SPARK_MASTER_URL}"
   --deploy-mode client
@@ -23,19 +23,23 @@ SUBMIT_OPTS=(
 )
 
 echo ""
-echo "----- Step 1/4: Bronze ingestion (raw -> MinIO, as-is) -----"
+echo "----- Step 1/5: Bronze ingestion (raw -> MinIO, as-is) -----"
 python3 /app/src/ingest_bronze.py
 
 echo ""
-echo "----- Step 2/4: Silver transform (Spark cluster -> MinIO) -----"
+echo "----- Step 2/5: Silver transform (Spark cluster -> MinIO) -----"
 spark-submit "${SUBMIT_OPTS[@]}" /app/src/transform_silver.py
 
 echo ""
-echo "----- Step 3/4: Gold aggregation - insights (Spark cluster -> MinIO) -----"
+echo "----- Step 3/5: Gold aggregation - insights (Spark cluster -> MinIO) -----"
 spark-submit "${SUBMIT_OPTS[@]}" /app/src/build_gold.py
 
 echo ""
-echo "----- Step 4/4: Dashboard generation -----"
+echo "----- Step 4/5: Warehouse load (MinIO -> PostgreSQL) -----"
+spark-submit "${SUBMIT_OPTS[@]}" /app/src/load_warehouse.py
+
+echo ""
+echo "----- Step 5/5: Dashboard generation (SQL -> HTML) -----"
 python3 /app/src/generate_dashboard.py
 
 echo ""

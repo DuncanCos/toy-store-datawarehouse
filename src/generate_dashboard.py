@@ -1,9 +1,9 @@
 """
 Dashboard generation.
 
-Reads the gold CSV tables (small, aggregated) straight from the gold bucket
-in MinIO with pandas, builds the charts with matplotlib and renders a single
-self-contained HTML file (charts embedded as base64 PNGs, no external
+Queries the aggregated gold tables from the PostgreSQL warehouse with plain
+SQL, builds the charts with matplotlib and renders a single self-contained
+HTML file (charts embedded as base64 PNGs, fonts inlined, no external
 dependency / no internet needed to view it) answering the four business
 questions.
 """
@@ -11,17 +11,15 @@ import base64
 import io
 import os
 
-import boto3
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import pandas as pd
-from botocore.client import Config
 from matplotlib.patches import Patch
 from matplotlib.ticker import FuncFormatter
 
-GOLD_BUCKET = os.environ.get("GOLD_BUCKET", "gold")
-GOLD_CSV_PREFIX = os.environ.get("GOLD_CSV_PREFIX", "toy_store/csv")
+from warehouse import connect
+
 OUTPUT_DIR = os.environ.get("OUTPUT_DIR", "/opt/output")
 
 
@@ -53,18 +51,10 @@ def build_font_faces():
     return "\n".join(blocks)
 
 
-def read_gold_csv(name):
-    """Download one aggregated gold CSV object from MinIO into a DataFrame."""
-    s3 = boto3.client(
-        "s3",
-        endpoint_url=os.environ["MINIO_ENDPOINT"],
-        aws_access_key_id=os.environ["MINIO_ACCESS_KEY"],
-        aws_secret_access_key=os.environ["MINIO_SECRET_KEY"],
-        config=Config(signature_version="s3v4"),
-        region_name="us-east-1",
-    )
-    obj = s3.get_object(Bucket=GOLD_BUCKET, Key=f"{GOLD_CSV_PREFIX}/{name}.csv")
-    return pd.read_csv(io.BytesIO(obj["Body"].read()))
+def query(sql):
+    """Run one SQL query against the warehouse and return a DataFrame."""
+    with connect() as conn:
+        return pd.read_sql(sql, conn)
 
 COLORS = {
     "sessions": "#2FB8AC",
@@ -202,11 +192,18 @@ def build_table(df, columns=None, max_rows=15):
 
 
 def main():
-    monthly = read_gold_csv("gold_monthly_trend")
-    channels = read_gold_csv("gold_channel_performance")
-
-    monthly = monthly.sort_values("year_month")
-    channels = channels.sort_values("revenue", ascending=False)
+    monthly = query("""
+        SELECT year_month, sessions, orders, revenue,
+               conversion_rate_pct, aov_usd
+        FROM gold.gold_monthly_trend
+        ORDER BY year_month
+    """)
+    channels = query("""
+        SELECT channel, channel_type, sessions, orders,
+               conversion_rate_pct, revenue, revenue_per_session_usd
+        FROM gold.gold_channel_performance
+        ORDER BY revenue DESC
+    """)
 
     # ---- narrative numbers -------------------------------------------------
     total_sessions = int(monthly["sessions"].sum())

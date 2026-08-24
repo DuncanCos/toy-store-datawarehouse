@@ -10,7 +10,7 @@ run:
 stop:
 	docker compose down
 
-# Stops everything and wipes generated data (minio volume = all 3 medallion layers, output/)
+# Stops everything and wipes generated data (minio + postgres volumes, output/)
 clean:
 	docker compose down -v
 	rm -rf output/*

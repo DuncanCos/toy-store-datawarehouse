@@ -9,23 +9,18 @@ the four business questions from insights.txt:
   3. Marketing channel performance
   4. Average order value (revenue per order) trend
 
-Each gold table is written to the gold bucket in MinIO as Parquet (the
-data warehouse itself) and as a single flat CSV object (a convenience copy
-consumed by the dashboard generator, which does not need Spark to read it).
+Each gold table is written as Parquet to the gold zone of the lake. The next
+step (load_warehouse.py) copies it into PostgreSQL, which is what the
+dashboard actually queries.
 """
-import io
 import os
 
-import boto3
-from botocore.client import Config
 from pyspark.sql import functions as F
 
 from spark_session import build_spark
 
 SILVER_URI = os.environ.get("SILVER_URI", "s3a://silver/toy_store")
 GOLD_URI = os.environ.get("GOLD_URI", "s3a://gold/toy_store")
-GOLD_BUCKET = os.environ.get("GOLD_BUCKET", "gold")
-GOLD_CSV_PREFIX = os.environ.get("GOLD_CSV_PREFIX", "toy_store/csv")
 
 
 # Raw utm values are internal codenames; these make the dashboard readable.
@@ -53,32 +48,10 @@ def label_of(column, mapping):
     return expr.otherwise(col)
 
 
-def s3_client():
-    return boto3.client(
-        "s3",
-        endpoint_url=os.environ["MINIO_ENDPOINT"],
-        aws_access_key_id=os.environ["MINIO_ACCESS_KEY"],
-        aws_secret_access_key=os.environ["MINIO_SECRET_KEY"],
-        config=Config(signature_version="s3v4"),
-        region_name="us-east-1",
-    )
-
-
 def save(df, name):
-    # The warehouse table itself, partition files in the gold bucket.
     df.write.mode("overwrite").parquet(f"{GOLD_URI}/{name}")
-
-    # A single flat CSV object next to it, so the dashboard can read the
-    # aggregate with plain pandas instead of spinning up Spark.
-    pdf = df.toPandas()
-    buf = io.StringIO()
-    pdf.to_csv(buf, index=False)
-    key = f"{GOLD_CSV_PREFIX}/{name}.csv"
-    s3_client().put_object(
-        Bucket=GOLD_BUCKET, Key=key, Body=buf.getvalue().encode("utf-8")
-    )
-    print(f"  -> gold/{name}: {len(pdf)} rows -> {GOLD_URI}/{name} (+ s3://{GOLD_BUCKET}/{key})")
-    return pdf
+    print(f"  -> gold/{name}: {df.count()} lignes -> {GOLD_URI}/{name}")
+    return df
 
 
 def main():

@@ -1,0 +1,85 @@
+{
+  "_comment": [
+    "Declarations optionnelles pour la couche silver.",
+    "Tout fichier CSV depose dans data/raw/ est ingere et transforme meme s'il",
+    "n'apparait PAS ici : son schema est alors infere automatiquement.",
+    "Declarer une table sert a forcer les types et la cle primaire.",
+    "Types acceptes : int, long, double, string, timestamp, date, boolean."
+  ],
+
+  "defaults": {
+    "null_value": "NULL",
+    "timestamp_format": "yyyy-MM-dd HH:mm:ss",
+    "timestamp_columns": ["created_at"],
+    "drop_duplicates": true
+  },
+
+  "tables": {
+    "orders": {
+      "primary_key": "order_id",
+      "columns": {
+        "order_id": "int",
+        "created_at": "string",
+        "website_session_id": "int",
+        "user_id": "int",
+        "primary_product_id": "int",
+        "items_purchased": "int",
+        "price_usd": "double",
+        "cogs_usd": "double"
+      }
+    },
+    "order_items": {
+      "primary_key": "order_item_id",
+      "columns": {
+        "order_item_id": "int",
+        "created_at": "string",
+        "order_id": "int",
+        "product_id": "int",
+        "is_primary_item": "int",
+        "price_usd": "double",
+        "cogs_usd": "double"
+      }
+    },
+    "order_item_refunds": {
+      "primary_key": "order_item_refund_id",
+      "columns": {
+        "order_item_refund_id": "int",
+        "created_at": "string",
+        "order_item_id": "int",
+        "order_id": "int",
+        "refund_amount_usd": "double"
+      }
+    },
+    "products": {
+      "primary_key": "product_id",
+      "columns": {
+        "product_id": "int",
+        "created_at": "string",
+        "product_name": "string"
+      }
+    },
+    "website_sessions": {
+      "primary_key": "website_session_id",
+      "columns": {
+        "website_session_id": "int",
+        "created_at": "string",
+        "user_id": "int",
+        "is_repeat_session": "int",
+        "utm_source": "string",
+        "utm_campaign": "string",
+        "utm_content": "string",
+        "device_type": "string",
+        "http_referer": "string"
+      }
+    },
+    "website_pageviews": {
+      "primary_key": "website_pageview_id",
+      "columns": {
+        "website_pageview_id": "int",
+        "created_at": "string",
+        "website_session_id": "int",
+        "pageview_url": "string"
+      }
+    }
+  }
+}
