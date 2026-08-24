@@ -19,22 +19,32 @@ GOLD_DIR = os.environ.get("GOLD_DIR", "/opt/spark-data/processed/gold")
 OUTPUT_DIR = os.environ.get("OUTPUT_DIR", "/opt/output")
 
 COLORS = {
-    "sessions": "#4C6EF5",
-    "orders": "#F76707",
-    "revenue": "#2F9E44",
-    "conv": "#E64980",
-    "aov": "#7048E8",
-    "bar": "#4C6EF5",
+    "sessions": "#2FB8AC",
+    "orders": "#FF6B4A",
+    "revenue": "#2FB8AC",
+    "conv": "#FF6B4A",
+    "aov": "#FFC145",
+    "bar": "#FF6B4A",
+    "bar2": "#2FB8AC",
+    "text": "#1B1F3B",
+    "muted": "#8A8FA3",
+    "grid": "#E4E6F1",
 }
 
 plt.rcParams.update({
     "figure.facecolor": "white",
     "axes.facecolor": "white",
-    "axes.edgecolor": "#D0D5DD",
+    "axes.edgecolor": COLORS["grid"],
     "axes.grid": True,
-    "grid.color": "#EAECF0",
+    "grid.color": COLORS["grid"],
     "grid.linewidth": 0.8,
     "font.size": 11,
+    "font.family": "sans-serif",
+    "text.color": COLORS["text"],
+    "axes.labelcolor": COLORS["text"],
+    "xtick.color": COLORS["muted"],
+    "ytick.color": COLORS["muted"],
+    "axes.titlecolor": COLORS["text"],
     "axes.spines.top": False,
     "axes.spines.right": False,
 })
@@ -99,7 +109,7 @@ def chart_channels(channels):
 def chart_channel_conversion(channels):
     top = channels[channels["sessions"] >= 100].sort_values("conversion_rate_pct", ascending=False).head(10).iloc[::-1]
     fig, ax = plt.subplots(figsize=(9, 4.5))
-    ax.barh(top["channel"], top["conversion_rate_pct"], color=COLORS["conv"])
+    ax.barh(top["channel"], top["conversion_rate_pct"], color=COLORS["bar2"])
     ax.set_xlabel("Taux de conversion (%)")
     ax.set_title("Top 10 canaux par taux de conversion (>= 100 sessions)")
     fig.tight_layout()
@@ -152,78 +162,253 @@ def main():
         max_rows=15,
     )
 
+    trend_direction_sessions = "en hausse" if sessions_growth >= 0 else "en baisse"
+    trend_direction_orders = "en hausse" if orders_growth >= 0 else "en baisse"
+    conv_direction = "en progression" if conv_last >= conv_first else "en recul"
+    aov_direction = "en hausse" if aov_last >= aov_first else "en baisse"
+
     html = f"""<!doctype html>
 <html lang="fr">
 <head>
 <meta charset="utf-8">
-<title>Toy Store E-Commerce - Dashboard</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rapport Maven Fuzzy Factory</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&family=Karla:ital,wght@0,400;0,500;0,700;1,400&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
 <style>
   :root {{
-    --bg: #F8F9FB;
-    --card: #FFFFFF;
-    --text: #1D2939;
-    --muted: #667085;
-    --border: #E4E7EC;
-    --accent: #4C6EF5;
+    --bg: #F4F5FA;
+    --surface: #FFFFFF;
+    --surface-raised: #FFFFFF;
+    --text: #1B1F3B;
+    --muted: #5B6178;
+    --border: #E4E6F1;
+    --accent: #FF6B4A;
+    --accent-ink: #B8391F;
+    --accent-soft: #FFE7E0;
+    --teal: #2FB8AC;
+    --teal-soft: #DDF4F1;
+    --amber: #FFC145;
+    --amber-soft: #FFF2D9;
+    --shadow: 0 1px 2px rgba(27, 31, 59, 0.05), 0 8px 24px -16px rgba(27, 31, 59, 0.18);
   }}
+  @media (prefers-color-scheme: dark) {{
+    :root:not([data-theme="light"]) {{
+      --bg: #14162A;
+      --surface: #1C1F38;
+      --surface-raised: #22254A;
+      --text: #EEF0FB;
+      --muted: #9EA3C4;
+      --border: #2F3357;
+      --accent: #FF8266;
+      --accent-ink: #FFB6A0;
+      --accent-soft: #3A2620;
+      --teal: #4ED0C3;
+      --teal-soft: #17332F;
+      --amber: #FFCE6B;
+      --amber-soft: #362B14;
+      --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 12px 28px -18px rgba(0,0,0,0.6);
+    }}
+  }}
+  :root[data-theme="dark"] {{
+    --bg: #14162A;
+    --surface: #1C1F38;
+    --surface-raised: #22254A;
+    --text: #EEF0FB;
+    --muted: #9EA3C4;
+    --border: #2F3357;
+    --accent: #FF8266;
+    --accent-ink: #FFB6A0;
+    --accent-soft: #3A2620;
+    --teal: #4ED0C3;
+    --teal-soft: #17332F;
+    --amber: #FFCE6B;
+    --amber-soft: #362B14;
+    --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 12px 28px -18px rgba(0,0,0,0.6);
+  }}
+
   * {{ box-sizing: border-box; }}
+  html {{ background: var(--bg); }}
   body {{
     margin: 0;
-    font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    font-family: "Karla", -apple-system, "Segoe UI", sans-serif;
     background: var(--bg);
     color: var(--text);
+    -webkit-font-smoothing: antialiased;
   }}
+  a {{ color: var(--accent-ink); }}
+
   header {{
-    background: linear-gradient(135deg, #364FC7, #4C6EF5);
-    color: white;
-    padding: 40px 24px;
+    padding: 56px 24px 76px;
+    background:
+      radial-gradient(760px 320px at 12% -10%, var(--accent-soft), transparent 60%),
+      radial-gradient(620px 280px at 88% 0%, var(--teal-soft), transparent 55%);
+    border-bottom: 1px solid var(--border);
   }}
-  header h1 {{ margin: 0 0 6px 0; font-size: 28px; }}
-  header p {{ margin: 0; opacity: 0.9; }}
+  .eyebrow {{
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 12px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 0 0 14px;
+  }}
+  .eyebrow::before {{
+    content: "";
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--teal);
+    box-shadow: 0 0 0 3px var(--teal-soft);
+  }}
+  header h1 {{
+    font-family: "Fredoka", "Karla", sans-serif;
+    font-weight: 600;
+    font-size: clamp(28px, 4vw, 40px);
+    line-height: 1.15;
+    margin: 0 0 12px;
+    text-wrap: balance;
+    max-width: 20ch;
+  }}
+  header p.lede {{
+    margin: 0;
+    max-width: 62ch;
+    color: var(--muted);
+    font-size: 16px;
+    line-height: 1.6;
+  }}
+  header p.lede strong {{ color: var(--text); }}
+
   main {{
-    max-width: 1100px;
-    margin: -28px auto 60px auto;
+    max-width: 980px;
+    margin: -40px auto 72px;
     padding: 0 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
   }}
+
   .kpis {{
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-    gap: 16px;
-    margin-bottom: 28px;
+    gap: 14px;
   }}
   .kpi {{
-    background: var(--card);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 18px 20px;
-    box-shadow: 0 1px 2px rgba(16,24,40,0.04);
-  }}
-  .kpi .label {{ font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }}
-  .kpi .value {{ font-size: 24px; font-weight: 700; margin-top: 4px; }}
-  section.card {{
-    background: var(--card);
+    background: var(--surface);
     border: 1px solid var(--border);
     border-radius: 14px;
-    padding: 24px 28px;
-    margin-bottom: 24px;
-    box-shadow: 0 1px 2px rgba(16,24,40,0.04);
+    padding: 18px 20px;
+    box-shadow: var(--shadow);
   }}
-  section.card h2 {{ margin-top: 0; font-size: 18px; }}
-  section.card .question {{ color: var(--muted); font-style: italic; margin-bottom: 14px; }}
-  section.card img {{ max-width: 100%; height: auto; display: block; margin: 12px auto; }}
-  .charts-row {{ display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }}
-  @media (max-width: 800px) {{ .charts-row {{ grid-template-columns: 1fr; }} }}
-  table.data-table {{ width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 10px; }}
-  table.data-table th, table.data-table td {{ padding: 8px 10px; border-bottom: 1px solid var(--border); text-align: right; }}
-  table.data-table th:first-child, table.data-table td:first-child {{ text-align: left; }}
-  table.data-table th {{ color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; }}
-  footer {{ text-align: center; color: var(--muted); font-size: 12px; padding-bottom: 30px; }}
+  .kpi .label {{
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 11px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }}
+  .kpi .value {{
+    font-family: "IBM Plex Mono", monospace;
+    font-variant-numeric: tabular-nums;
+    font-size: 26px;
+    font-weight: 600;
+    margin-top: 6px;
+    color: var(--text);
+  }}
+
+  section.card {{
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 18px;
+    padding: 30px 32px;
+    box-shadow: var(--shadow);
+  }}
+  section.card .kicker {{
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    margin-bottom: 4px;
+  }}
+  section.card .kicker .num {{
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--accent-ink);
+    background: var(--accent-soft);
+    border-radius: 999px;
+    padding: 3px 10px;
+  }}
+  section.card h2 {{
+    font-family: "Fredoka", "Karla", sans-serif;
+    font-weight: 600;
+    margin: 0 0 6px;
+    font-size: 21px;
+    text-wrap: balance;
+  }}
+  section.card .question {{
+    color: var(--muted);
+    font-style: italic;
+    margin: 0 0 18px;
+    font-size: 14.5px;
+  }}
+  section.card .chart {{
+    background: var(--surface-raised);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 12px;
+    margin-bottom: 18px;
+  }}
+  section.card img {{ max-width: 100%; height: auto; display: block; margin: 0 auto; border-radius: 4px; }}
+  section.card p.answer {{ line-height: 1.65; font-size: 15px; margin: 0; }}
+  section.card p.answer + p.answer {{ margin-top: 10px; }}
+  .charts-row {{ display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }}
+  @media (max-width: 760px) {{ .charts-row {{ grid-template-columns: 1fr; }} }}
+
+  .table-wrap {{ overflow-x: auto; margin-top: 18px; border: 1px solid var(--border); border-radius: 12px; }}
+  table.data-table {{ width: 100%; border-collapse: collapse; font-size: 13.5px; min-width: 560px; }}
+  table.data-table th, table.data-table td {{
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    font-family: "IBM Plex Mono", monospace;
+  }}
+  table.data-table td:first-child, table.data-table th:first-child {{
+    text-align: left;
+    font-family: "Karla", sans-serif;
+  }}
+  table.data-table tbody tr:last-child td {{ border-bottom: none; }}
+  table.data-table tbody tr:hover {{ background: var(--surface-raised); }}
+  table.data-table th {{
+    color: var(--muted);
+    font-weight: 600;
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    background: var(--surface-raised);
+  }}
+
+  footer {{
+    text-align: center;
+    color: var(--muted);
+    font-size: 12.5px;
+    font-family: "IBM Plex Mono", monospace;
+    padding: 8px 24px 40px;
+  }}
 </style>
 </head>
 <body>
 <header>
-  <h1>Toy Store E-Commerce - Dashboard</h1>
-  <p>Pipeline medaillon (bronze / silver / gold) - ingestion, MinIO, Spark cluster, restitution</p>
+  <p class="eyebrow">Maven Fuzzy Factory &middot; rapport genere automatiquement</p>
+  <h1>Sessions, conversion et revenu du e-commerce jouets</h1>
+  <p class="lede">
+    Pipeline medaillon (bronze &rarr; silver &rarr; gold) execute sur un cluster
+    <strong>Spark</strong> reel, donnees brutes persistees dans <strong>MinIO</strong>.
+    Ce rapport repond aux 4 questions metier sur <strong>{total_sessions:,.0f}</strong>
+    sessions et <strong>{total_orders:,.0f}</strong> commandes.
+  </p>
 </header>
 <main>
 
@@ -231,71 +416,78 @@ def main():
     <div class="kpi"><div class="label">Sessions totales</div><div class="value">{total_sessions:,.0f}</div></div>
     <div class="kpi"><div class="label">Commandes totales</div><div class="value">{total_orders:,.0f}</div></div>
     <div class="kpi"><div class="label">Chiffre d'affaires total</div><div class="value">${total_revenue:,.0f}</div></div>
-    <div class="kpi"><div class="label">Taux de conversion global</div><div class="value">{overall_conv}%</div></div>
+    <div class="kpi"><div class="label">Conversion globale</div><div class="value">{overall_conv}%</div></div>
   </div>
 
   <section class="card">
-    <h2>1. Tendance du nombre de sessions et du volume de commandes</h2>
+    <div class="kicker"><span class="num">01</span></div>
+    <h2>Tendance du trafic et du volume de commandes</h2>
     <p class="question">Quelle est la tendance du nombre de sessions sur le site et du volume de commandes ?</p>
-    <img src="data:image/png;base64,{img_sessions_orders}" alt="Sessions vs commandes">
-    <p>
-      Entre les 3 premiers et les 3 derniers mois observés, les sessions ont
-      {"progressé de " + f"{sessions_growth:,.0f}%" if sessions_growth >= 0 else "reculé de " + f"{abs(sessions_growth):,.0f}%"}
-      et les commandes ont {"progressé de " + f"{orders_growth:,.0f}%" if orders_growth >= 0 else "reculé de " + f"{abs(orders_growth):,.0f}%"}.
+    <div class="chart"><img src="data:image/png;base64,{img_sessions_orders}" alt="Sessions vs commandes par mois"></div>
+    <p class="answer">
+      Entre les 3 premiers et les 3 derniers mois observes, les sessions sont
+      <strong>{trend_direction_sessions}</strong> ({sessions_growth:+.0f}%) et les commandes sont
+      <strong>{trend_direction_orders}</strong> ({orders_growth:+.0f}%).
       Le mois le plus actif en volume de commandes est <strong>{best_month['year_month']}</strong>
       avec {int(best_month['orders']):,} commandes pour {int(best_month['sessions']):,} sessions.
-      La croissance des commandes suit globalement celle des sessions, ce qui indique que le
-      trafic est le principal moteur du volume de ventes plutot qu'une amelioration ponctuelle
-      du taux de conversion.
+    </p>
+    <p class="answer">
+      La croissance des commandes suit globalement celle des sessions : le trafic reste le
+      principal moteur du volume de ventes, plutot qu'une amelioration ponctuelle du taux de conversion.
     </p>
   </section>
 
   <section class="card">
-    <h2>2. Taux de conversion session -> commande</h2>
+    <div class="kicker"><span class="num">02</span></div>
+    <h2>Taux de conversion session &rarr; commande</h2>
     <p class="question">Quel est le taux de conversion session-commande ? Comment a-t-il evolue ?</p>
-    <img src="data:image/png;base64,{img_conversion}" alt="Taux de conversion">
-    <p>
+    <div class="chart"><img src="data:image/png;base64,{img_conversion}" alt="Taux de conversion par mois"></div>
+    <p class="answer">
       Le taux de conversion global sur toute la periode est de <strong>{overall_conv}%</strong>.
-      Il est passe d'une moyenne de {conv_first:.2f}% sur les 3 premiers mois a
-      {conv_last:.2f}% sur les 3 derniers mois
-      ({"amelioration" if conv_last >= conv_first else "baisse"} de {abs(conv_last - conv_first):.2f} points).
-      Cette evolution reflete les optimisations successives du site et du tunnel d'achat au fil du temps.
+      Il est passe d'une moyenne de <strong>{conv_first:.2f}%</strong> sur les 3 premiers mois a
+      <strong>{conv_last:.2f}%</strong> sur les 3 derniers mois : {conv_direction}
+      de {abs(conv_last - conv_first):.2f} points.
     </p>
+    <p class="answer">Cette evolution reflete les optimisations successives du site et du tunnel d'achat au fil du temps.</p>
   </section>
 
   <section class="card">
-    <h2>3. Performance des canaux marketing</h2>
+    <div class="kicker"><span class="num">03</span></div>
+    <h2>Performance des canaux marketing</h2>
     <p class="question">Quels canaux marketing ont ete les plus performants ?</p>
     <div class="charts-row">
-      <img src="data:image/png;base64,{img_channels}" alt="CA par canal">
-      <img src="data:image/png;base64,{img_channel_conv}" alt="Conversion par canal">
+      <div class="chart"><img src="data:image/png;base64,{img_channels}" alt="CA par canal"></div>
+      <div class="chart"><img src="data:image/png;base64,{img_channel_conv}" alt="Conversion par canal"></div>
     </div>
-    <p>
+    <p class="answer">
       Le canal generant le plus de chiffre d'affaires est <strong>{top_channel['channel']}</strong>
       (${top_channel['revenue']:,.0f}, {int(top_channel['orders']):,} commandes,
-      taux de conversion de {top_channel['conversion_rate_pct']}%).
-      En termes d'efficacite (taux de conversion, canaux avec au moins 100 sessions), le meilleur est
-      <strong>{top_conv_channel['channel']}</strong> avec {top_conv_channel['conversion_rate_pct']}% de conversion.
-      Le detail des {min(15, len(channels))} principaux canaux est disponible ci-dessous.
+      {top_channel['conversion_rate_pct']}% de conversion).
+      En termes d'efficacite (canaux avec au moins 100 sessions), le meilleur taux de conversion
+      revient a <strong>{top_conv_channel['channel']}</strong> avec {top_conv_channel['conversion_rate_pct']}%.
     </p>
-    {table_channels}
+    <div class="table-wrap">
+      {table_channels}
+    </div>
   </section>
 
   <section class="card">
-    <h2>4. Evolution du chiffre d'affaires par commande (AOV)</h2>
+    <div class="kicker"><span class="num">04</span></div>
+    <h2>Evolution du panier moyen (AOV)</h2>
     <p class="question">Comment le chiffre d'affaires par commande a-t-il evolue ?</p>
-    <img src="data:image/png;base64,{img_aov}" alt="AOV dans le temps">
-    <p>
-      Le panier moyen (AOV) est passe de ${aov_first:,.2f} en moyenne sur les 3 premiers mois
-      a ${aov_last:,.2f} sur les 3 derniers mois
-      ({"hausse" if aov_last >= aov_first else "baisse"} de ${abs(aov_last - aov_first):,.2f}).
+    <div class="chart"><img src="data:image/png;base64,{img_aov}" alt="AOV dans le temps"></div>
+    <p class="answer">
+      Le panier moyen est passe de <strong>${aov_first:,.2f}</strong> en moyenne sur les 3 premiers mois a
+      <strong>${aov_last:,.2f}</strong> sur les 3 derniers mois : {aov_direction} de ${abs(aov_last - aov_first):,.2f}.
+    </p>
+    <p class="answer">
       {"Cette hausse peut s'expliquer par l'ajout de nouveaux produits au catalogue et/ou par du cross-sell." if aov_last >= aov_first else "Cette baisse peut s'expliquer par une part croissante de produits d'entree de gamme dans le mix de vente."}
     </p>
   </section>
 
 </main>
 <footer>
-  Genere automatiquement par le pipeline Spark (bronze -> silver -> gold -> dashboard).
+  genere automatiquement par le pipeline Spark &middot; bronze &rarr; silver &rarr; gold &rarr; dashboard
 </footer>
 </body>
 </html>
