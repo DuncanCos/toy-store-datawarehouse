@@ -1,22 +1,40 @@
 """
 Dashboard generation.
 
-Reads the gold CSV tables (small, aggregated) with pandas, builds the
-charts with matplotlib and renders a single self-contained HTML file
-(charts embedded as base64 PNGs, no external dependency / no internet
-needed to view it) answering the four business questions.
+Reads the gold CSV tables (small, aggregated) straight from the gold bucket
+in MinIO with pandas, builds the charts with matplotlib and renders a single
+self-contained HTML file (charts embedded as base64 PNGs, no external
+dependency / no internet needed to view it) answering the four business
+questions.
 """
 import base64
 import io
 import os
 
+import boto3
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import pandas as pd
+from botocore.client import Config
 
-GOLD_DIR = os.environ.get("GOLD_DIR", "/opt/spark-data/processed/gold")
+GOLD_BUCKET = os.environ.get("GOLD_BUCKET", "gold")
+GOLD_CSV_PREFIX = os.environ.get("GOLD_CSV_PREFIX", "toy_store/csv")
 OUTPUT_DIR = os.environ.get("OUTPUT_DIR", "/opt/output")
+
+
+def read_gold_csv(name):
+    """Download one aggregated gold CSV object from MinIO into a DataFrame."""
+    s3 = boto3.client(
+        "s3",
+        endpoint_url=os.environ["MINIO_ENDPOINT"],
+        aws_access_key_id=os.environ["MINIO_ACCESS_KEY"],
+        aws_secret_access_key=os.environ["MINIO_SECRET_KEY"],
+        config=Config(signature_version="s3v4"),
+        region_name="us-east-1",
+    )
+    obj = s3.get_object(Bucket=GOLD_BUCKET, Key=f"{GOLD_CSV_PREFIX}/{name}.csv")
+    return pd.read_csv(io.BytesIO(obj["Body"].read()))
 
 COLORS = {
     "sessions": "#2FB8AC",
@@ -124,8 +142,8 @@ def build_table(df, columns=None, max_rows=15):
 
 
 def main():
-    monthly = pd.read_csv(os.path.join(GOLD_DIR, "gold_monthly_trend.csv"))
-    channels = pd.read_csv(os.path.join(GOLD_DIR, "gold_channel_performance.csv"))
+    monthly = read_gold_csv("gold_monthly_trend")
+    channels = read_gold_csv("gold_channel_performance")
 
     monthly = monthly.sort_values("year_month")
     channels = channels.sort_values("revenue", ascending=False)

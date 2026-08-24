@@ -1,3 +1,15 @@
+# All three Spark services share one image: the executors on spark-worker
+# need the S3A jars just as much as the driver does.
+x-spark-image: &spark-image
+  build:
+    context: ./docker/spark
+  image: toystore-spark:local
+
+x-minio-env: &minio-env
+  MINIO_ENDPOINT: http://minio:9000
+  MINIO_ACCESS_KEY: minioadmin
+  MINIO_SECRET_KEY: minioadmin
+
 services:
   minio:
     image: minio/minio:latest
@@ -33,16 +45,15 @@ services:
       "
 
   spark-master:
-    image: apache/spark:3.5.1
+    <<: *spark-image
     container_name: toystore-spark-master
     user: root
     command: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.master.Master", "--host", "spark-master"]
+    environment:
+      <<: *minio-env
     ports:
       - "8081:8080"
       - "7077:7077"
-    volumes:
-      - ${DATA_PATH:-./data/raw}:/opt/spark-data/raw:ro
-      - spark_data:/opt/spark-data/processed
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080"]
       interval: 5s
@@ -50,41 +61,42 @@ services:
       retries: 20
 
   spark-worker:
-    image: apache/spark:3.5.1
+    <<: *spark-image
     container_name: toystore-spark-worker
     user: root
     command: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.worker.Worker", "spark://spark-master:7077"]
     environment:
+      <<: *minio-env
       SPARK_WORKER_MEMORY: 2g
       SPARK_WORKER_CORES: 2
     depends_on:
       spark-master:
         condition: service_healthy
-    volumes:
-      - ${DATA_PATH:-./data/raw}:/opt/spark-data/raw:ro
-      - spark_data:/opt/spark-data/processed
 
   pipeline:
-    build:
-      context: ./docker/pipeline
+    <<: *spark-image
     container_name: toystore-pipeline
+    user: root
+    command: ["/app/run_pipeline.sh"]
     depends_on:
       spark-master:
         condition: service_healthy
       minio-init:
         condition: service_completed_successfully
     environment:
+      <<: *minio-env
       SPARK_MASTER_URL: spark://spark-master:7077
-      MINIO_ENDPOINT: http://minio:9000
-      MINIO_ACCESS_KEY: minioadmin
-      MINIO_SECRET_KEY: minioadmin
+      # Raw CSVs are read from the host only once, by the bronze ingestion.
+      # Every layer after that reads and writes s3a:// paths on MinIO.
       RAW_DIR: /opt/spark-data/raw
-      SILVER_DIR: /opt/spark-data/processed/silver
-      GOLD_DIR: /opt/spark-data/processed/gold
+      BRONZE_URI: s3a://bronze/toy_store/raw
+      SILVER_URI: s3a://silver/toy_store
+      GOLD_URI: s3a://gold/toy_store
+      GOLD_BUCKET: gold
+      GOLD_CSV_PREFIX: toy_store/csv
       OUTPUT_DIR: /opt/output
     volumes:
       - ${DATA_PATH:-./data/raw}:/opt/spark-data/raw:ro
-      - spark_data:/opt/spark-data/processed
       - ./output:/opt/output
       - ./src:/app/src:ro
     ports:
@@ -92,4 +104,3 @@ services:
 
 volumes:
   minio_data:
-  spark_data:

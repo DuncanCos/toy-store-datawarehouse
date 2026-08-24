@@ -6,23 +6,32 @@ Factory)**.
 
 ## Architecture
 
+Les trois couches du medaillon vivent dans le **stockage objet MinIO**. Apres
+l'ingestion bronze, plus rien ne relit le disque local : Spark lit et ecrit
+uniquement des chemins `s3a://`.
+
 ```
-                 ┌────────────┐
-   CSV bruts --> │  MinIO     │  bronze/  (donnees brutes, telles quelles)
-   (volume)      │  (S3)      │
-                 └────────────┘
-                        │
-                        ▼
-   ┌───────────────────────────────────────────────┐
-   │           Spark cluster (master + worker)      │
-   │  spark://spark-master:7077                     │
-   │                                                 │
-   │  silver/  = CSV bruts nettoyes + types + dedup  │
-   │             (Parquet, volume partage)           │
-   │                                                 │
-   │  gold/    = tables d'agregation repondant aux   │
-   │             insights metier (Parquet + CSV)     │
-   └───────────────────────────────────────────────┘
+   CSV bruts (volume, lu une seule fois)
+          │
+          │  ingest_bronze.py (boto3)
+          ▼
+   ┌──────────────────────────────────────────────┐
+   │                  MinIO (S3)                   │
+   │                                                │
+   │   s3a://bronze/  CSV bruts, tels quels         │
+   │        ▲   │                                   │
+   │        │   ▼                                   │
+   │   s3a://silver/  Parquet nettoye + type        │
+   │        ▲   │                                   │
+   │        │   ▼                                   │
+   │   s3a://gold/    agregats metier (Parquet+CSV) │
+   └──────────────────────────────────────────────┘
+            ▲   │           lecture / ecriture s3a
+            │   ▼
+   ┌──────────────────────────────────────────────┐
+   │      Spark cluster (master + worker)          │
+   │      spark://spark-master:7077                │
+   └──────────────────────────────────────────────┘
                         │
                         ▼
               dashboard HTML (output/index.html)
@@ -39,20 +48,44 @@ Services docker-compose :
 | `spark-worker`| Worker Spark (2 cores / 2G)                                 |
 | `pipeline`    | Ingestion, jobs Spark, generation du dashboard, puis le sert |
 
+Les trois services Spark partagent **une seule image** (`docker/spark/`) : les
+executors du worker ont besoin des jars du connecteur S3A
+(`hadoop-aws` + `aws-java-sdk-bundle`, versions alignees sur le Hadoop 3.3.4
+embarque dans l'image Spark) exactement comme le driver.
+
+## Pourquoi MinIO plutot que HDFS ?
+
+Le sujet autorise explicitement « base de donnees **ou stockage objet** ».
+Le stockage objet a ete retenu parce que :
+
+- il correspond a l'architecture reelle du marche (lakehouse : S3 / ADLS / GCS),
+  qui **separe le calcul du stockage** — le cluster Spark est jetable, les
+  donnees survivent ;
+- MinIO parle l'**API S3** : le meme code tourne contre AWS S3 en changeant
+  seulement l'endpoint ;
+- un seul conteneur, contre un namenode + des datanodes pour HDFS ;
+- les atouts de HDFS (data locality, gros blocs sequentiels) sont sans effet
+  ici : ~103 Mo de CSV sur une seule machine.
+
 ## Medaillon
 
 1. **Bronze** (`ingest_bronze.py`) - copie les CSV bruts tels quels dans MinIO
-   (`s3://bronze/toy_store/raw/`), avant toute transformation.
-2. **Silver** (`transform_silver.py`, job Spark) - lit les CSV bruts, applique
-   un schema explicite, type les dates, deduplique, ecrit en Parquet sur un
-   volume partage (`silver/<table>`).
+   (`s3://bronze/toy_store/raw/`), avant toute transformation. C'est la seule
+   etape qui touche le disque local.
+2. **Silver** (`transform_silver.py`, job Spark) - lit les CSV **depuis le
+   bronze** (`s3a://bronze/...`, source de verite une fois ingeree), applique
+   un schema explicite, type les dates, deduplique, ecrit en Parquet dans
+   `s3a://silver/toy_store/<table>`.
 3. **Gold** (`build_gold.py`, job Spark) - agrege les tables silver pour
    repondre aux 4 questions metier (`insights.txt`) : tendance
    sessions/commandes, taux de conversion, performance des canaux marketing,
-   evolution du panier moyen (AOV). Ecrit en Parquet + CSV.
-4. **Dashboard** (`generate_dashboard.py`) - lit les tables gold (pandas),
-   genere les graphiques (matplotlib) et produit un unique fichier HTML
-   autonome (`output/index.html`) avec le texte de reponse a chaque insight.
+   evolution du panier moyen (AOV). Ecrit dans `s3a://gold/toy_store/` en
+   Parquet (la table d'entrepot) plus une copie CSV plate a cote, pour que
+   le dashboard puisse la lire sans relancer Spark.
+4. **Dashboard** (`generate_dashboard.py`) - telecharge les CSV gold depuis
+   MinIO (boto3 + pandas), genere les graphiques (matplotlib) et produit un
+   unique fichier HTML autonome (`output/index.html`) avec le texte de
+   reponse a chaque insight.
 
 ## Lancer le pipeline
 
@@ -82,7 +115,7 @@ Arreter :
 
 ```bash
 docker compose down
-# ou pour repartir de zero (efface les volumes minio/spark_data + output/):
+# ou pour repartir de zero (efface le volume minio + output/):
 make clean
 ```
 
@@ -91,19 +124,20 @@ make clean
 Le pipeline est un enchainement sequentiel simple (bronze -> silver -> gold ->
 dashboard), execute une seule fois par run, sans recurrence, DAG complexe,
 retry/backfill. Un orchestrateur n'apporterait rien ici ; l'enchainement est
-fait dans `docker/pipeline/run_pipeline.sh`.
+fait dans `docker/spark/run_pipeline.sh`.
 
 ## Structure du repo
 
 ```
 docker-compose.yml
 Makefile
-docker/pipeline/        # image du service "pipeline" (spark-submit + python)
+docker/spark/            # image commune master / worker / pipeline (+ jars S3A)
 src/
+  spark_session.py       # fabrique de SparkSession (cluster + config S3A/MinIO)
   ingest_bronze.py       # bronze : copie brute vers MinIO
-  transform_silver.py    # silver : nettoyage/typage (Spark)
-  build_gold.py          # gold : agregations / insights (Spark)
-  generate_dashboard.py  # dashboard HTML autonome
+  transform_silver.py    # silver : nettoyage/typage (Spark, s3a -> s3a)
+  build_gold.py          # gold : agregations / insights (Spark, s3a -> s3a)
+  generate_dashboard.py  # dashboard HTML autonome (lit le gold depuis MinIO)
 data/raw/                # CSV bruts (non versionnes)
 output/                  # dashboard genere (non versionne)
 ```

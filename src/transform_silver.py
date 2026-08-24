@@ -1,22 +1,23 @@
 """
 Silver layer - cleaning & typing.
 
-Reads the raw CSV files, applies explicit schemas, casts timestamps,
-drops exact duplicates and rows missing a primary key, then writes
-Parquet tables to the silver zone of the data lake. Runs on the real
-Spark cluster (spark://spark-master:7077).
+Reads the raw CSV files straight from the bronze bucket in MinIO (not from
+the local filesystem: bronze is the single source of truth once ingested),
+applies explicit schemas, casts timestamps, drops exact duplicates and rows
+missing a primary key, then writes Parquet tables to the silver bucket.
+Runs on the real Spark cluster (spark://spark-master:7077).
 """
 import os
 
-from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
 from pyspark.sql.types import (
     StructType, StructField, IntegerType, StringType, DoubleType
 )
 
-RAW_DIR = os.environ.get("RAW_DIR", "/opt/spark-data/raw")
-SILVER_DIR = os.environ.get("SILVER_DIR", "/opt/spark-data/processed/silver")
-MASTER_URL = os.environ.get("SPARK_MASTER_URL", "spark://spark-master:7077")
+from spark_session import build_spark
+
+BRONZE_URI = os.environ.get("BRONZE_URI", "s3a://bronze/toy_store/raw")
+SILVER_URI = os.environ.get("SILVER_URI", "s3a://silver/toy_store")
 
 TS_FMT = "yyyy-MM-dd HH:mm:ss"
 
@@ -91,28 +92,22 @@ TABLES = {
 
 
 def main():
-    spark = (
-        SparkSession.builder
-        .appName("toystore-silver")
-        .master(MASTER_URL)
-        .getOrCreate()
-    )
-    spark.sparkContext.setLogLevel("WARN")
+    spark = build_spark("toystore-silver")
 
     for name, cfg in TABLES.items():
-        path = os.path.join(RAW_DIR, f"{name}.csv")
+        src = f"{BRONZE_URI}/{name}.csv"
         df = (
             spark.read
             .option("header", True)
             .schema(cfg["schema"])
-            .csv(path)
+            .csv(src)
         )
 
         df = df.withColumn("created_at", F.to_timestamp("created_at", TS_FMT))
         df = df.dropDuplicates()
         df = df.filter(F.col(cfg["pk"]).isNotNull())
 
-        out_path = os.path.join(SILVER_DIR, name)
+        out_path = f"{SILVER_URI}/{name}"
         df.write.mode("overwrite").parquet(out_path)
 
         count = df.count()
