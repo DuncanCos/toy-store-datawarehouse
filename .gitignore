@@ -1,0 +1,6 @@
+data/raw/*.csv
+data/raw/*.zip
+output/*.html
+__pycache__/
+*.pyc
+.DS_Store
