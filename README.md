@@ -87,6 +87,19 @@ Le stockage objet a ete retenu parce que :
    unique fichier HTML autonome (`output/index.html`) avec le texte de
    reponse a chaque insight.
 
+### Le rendu : un seul fichier, zero dependance
+
+`output/index.html` est **entierement autonome** — il s'ouvre par un
+double-clic, sans serveur et **sans connexion internet** :
+
+- les 5 graphiques sont des PNG generes par matplotlib depuis la couche gold,
+  embarques en base64 (aucun fichier image a cote) ;
+- les 3 polices (Fredoka, Karla, IBM Plex Mono) sont stockees dans
+  `src/fonts/` et inlinees en `data:font/woff2` ;
+- aucune balise `<script>`, aucune requete reseau, aucun CDN.
+
+Il se transmet donc tel quel (mail, zip, cle USB) en gardant un rendu identique.
+
 ## Lancer le pipeline
 
 Une seule commande, aucune intervention manuelle entre le lancement et le
@@ -138,6 +151,7 @@ src/
   transform_silver.py    # silver : nettoyage/typage (Spark, s3a -> s3a)
   build_gold.py          # gold : agregations / insights (Spark, s3a -> s3a)
   generate_dashboard.py  # dashboard HTML autonome (lit le gold depuis MinIO)
+  fonts/                 # polices woff2 embarquees en base64 dans le HTML
 data/raw/                # CSV bruts (non versionnes)
 output/                  # dashboard genere (non versionne)
 ```

@@ -25,6 +25,34 @@ GOLD_CSV_PREFIX = os.environ.get("GOLD_CSV_PREFIX", "toy_store/csv")
 OUTPUT_DIR = os.environ.get("OUTPUT_DIR", "/opt/output")
 
 
+FONTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts")
+
+# Latin subsets vendored in the repo: the generated page must render
+# identically with no network access (no Google Fonts request).
+FONT_FACES = [
+    ("Fredoka", "fredoka-600.woff2", 600, "normal"),
+    ("Karla", "karla-var.woff2", "400 700", "normal"),
+    ("IBM Plex Mono", "ibmplexmono-500.woff2", 500, "normal"),
+]
+
+
+def build_font_faces():
+    """Inline every vendored font as a data: URI @font-face block."""
+    blocks = []
+    for family, filename, weight, style in FONT_FACES:
+        path = os.path.join(FONTS_DIR, filename)
+        with open(path, "rb") as fh:
+            b64 = base64.b64encode(fh.read()).decode("ascii")
+        blocks.append(
+            "@font-face{{font-family:'{f}';font-style:{s};font-weight:{w};"
+            "font-display:swap;"
+            "src:url(data:font/woff2;base64,{b}) format('woff2');}}".format(
+                f=family, s=style, w=weight, b=b64
+            )
+        )
+    return "\n".join(blocks)
+
+
 def read_gold_csv(name):
     """Download one aggregated gold CSV object from MinIO into a DataFrame."""
     s3 = boto3.client(
@@ -248,6 +276,8 @@ def main():
         max_rows=5,
     )
 
+    font_faces = build_font_faces()
+
     trend_direction_sessions = "en hausse" if sessions_growth >= 0 else "en baisse"
     trend_direction_orders = "en hausse" if orders_growth >= 0 else "en baisse"
     conv_direction = "en progression" if conv_last >= conv_first else "en recul"
@@ -259,10 +289,9 @@ def main():
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Rapport Maven Fuzzy Factory</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&family=Karla:ital,wght@0,400;0,500;0,700;1,400&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
 <style>
+/* Polices embarquees en base64 : la page ne fait aucune requete reseau. */
+{font_faces}
   :root {{
     --bg: #F4F5FA;
     --surface: #FFFFFF;
