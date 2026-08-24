@@ -99,6 +99,11 @@ def main():
         df = (
             spark.read
             .option("header", True)
+            # The source files spell missing values as the literal string
+            # "NULL" (e.g. sessions with no utm_source). Without this they
+            # would be kept as the 4-character text "NULL" and pollute every
+            # downstream grouping.
+            .option("nullValue", "NULL")
             .schema(cfg["schema"])
             .csv(src)
         )

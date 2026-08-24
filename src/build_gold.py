@@ -28,6 +28,31 @@ GOLD_BUCKET = os.environ.get("GOLD_BUCKET", "gold")
 GOLD_CSV_PREFIX = os.environ.get("GOLD_CSV_PREFIX", "toy_store/csv")
 
 
+# Raw utm values are internal codenames; these make the dashboard readable.
+# Anything not listed falls back to the raw value rather than being hidden.
+SOURCE_LABELS = {
+    "gsearch": "Google",
+    "bsearch": "Bing",
+    "socialbook": "Socialbook",
+}
+CAMPAIGN_LABELS = {
+    "nonbrand": "acquisition",
+    "brand": "marque",
+    "desktop_targeted": "ciblage desktop",
+    "pilot": "pilote",
+}
+
+
+def label_of(column, mapping):
+    """Map known codenames to readable labels, keeping the raw value otherwise."""
+    col = F.col(column)
+    expr = None
+    for code, label in mapping.items():
+        cond = col == code
+        expr = F.when(cond, F.lit(label)) if expr is None else expr.when(cond, F.lit(label))
+    return expr.otherwise(col)
+
+
 def s3_client():
     return boto3.client(
         "s3",
@@ -101,29 +126,53 @@ def main():
 
     # ---------------------------------------------------------------
     # Insight 3 : marketing channel performance
+    #
+    # A session belongs to exactly one of three acquisition types:
+    #   - utm_source set                    -> paid campaign
+    #   - no utm_source but a referrer      -> organic search
+    #   - no utm_source and no referrer     -> direct (typed the URL)
+    # Grouping on the raw utm columns would lump the last two together,
+    # so the type is derived explicitly and the label is made readable.
     # ---------------------------------------------------------------
-    sessions_ch = sessions.withColumn(
-        "channel",
-        F.when(
-            F.col("utm_source").isNotNull(),
-            F.concat_ws(" / ", F.col("utm_source"), F.coalesce(F.col("utm_campaign"), F.lit("unknown"))),
-        ).when(
-            F.col("http_referer").isNull(), F.lit("direct (type-in)")
-        ).otherwise(
-            F.concat(
-                F.lit("organic: "),
-                F.regexp_extract(F.col("http_referer"), r"https?://(?:www\.)?([^/]+)", 1),
-            )
-        ),
+    sessions_ch = (
+        sessions
+        .withColumn(
+            "channel_type",
+            F.when(F.col("utm_source").isNotNull(), F.lit("Payant"))
+             .when(F.col("http_referer").isNotNull(), F.lit("Naturel"))
+             .otherwise(F.lit("Direct")),
+        )
+        .withColumn(
+            "referer_source",
+            F.regexp_extract(F.col("http_referer"), r"https?://(?:www\.)?([^/.]+)", 1),
+        )
+        .withColumn(
+            "channel",
+            F.when(
+                F.col("channel_type") == "Payant",
+                F.concat(
+                    label_of("utm_source", SOURCE_LABELS),
+                    F.lit(" Ads · "),
+                    label_of("utm_campaign", CAMPAIGN_LABELS),
+                ),
+            ).when(
+                F.col("channel_type") == "Naturel",
+                F.concat(label_of("referer_source", SOURCE_LABELS), F.lit(" · naturel")),
+            ).otherwise(F.lit("Accès direct")),
+        )
     )
 
-    channel_sessions = sessions_ch.groupBy("channel").agg(F.count("*").alias("sessions"))
+    channel_sessions = (
+        sessions_ch
+        .groupBy("channel", "channel_type")
+        .agg(F.count("*").alias("sessions"))
+    )
 
     channel_orders = (
         orders.join(
             sessions_ch.select("website_session_id", "channel"),
             on="website_session_id",
-            how="left",
+            how="inner",
         )
         .groupBy("channel")
         .agg(F.count("*").alias("orders"), F.sum("price_usd").alias("revenue"))
@@ -135,6 +184,10 @@ def main():
         .fillna({"orders": 0, "revenue": 0.0})
         .withColumn("conversion_rate_pct", F.round(F.col("orders") / F.col("sessions") * 100, 2))
         .withColumn("revenue_per_session_usd", F.round(F.col("revenue") / F.col("sessions"), 2))
+        .select(
+            "channel", "channel_type", "sessions", "orders",
+            "conversion_rate_pct", "revenue", "revenue_per_session_usd",
+        )
         .orderBy(F.col("revenue").desc())
     )
     save(channel_perf, "gold_channel_performance")

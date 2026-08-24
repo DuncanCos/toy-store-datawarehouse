@@ -17,6 +17,8 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import pandas as pd
 from botocore.client import Config
+from matplotlib.patches import Patch
+from matplotlib.ticker import FuncFormatter
 
 GOLD_BUCKET = os.environ.get("GOLD_BUCKET", "gold")
 GOLD_CSV_PREFIX = os.environ.get("GOLD_CSV_PREFIX", "toy_store/csv")
@@ -65,6 +67,8 @@ plt.rcParams.update({
     "axes.titlecolor": COLORS["text"],
     "axes.spines.top": False,
     "axes.spines.right": False,
+    # Keep the grid behind the bars instead of slicing through them.
+    "axes.axisbelow": True,
 })
 
 
@@ -114,22 +118,50 @@ def chart_aov(monthly):
     return fig_to_base64(fig)
 
 
+TYPE_COLORS = {
+    "Payant": "#FF6B4A",
+    "Naturel": "#2FB8AC",
+    "Direct": "#FFC145",
+}
+
+
+def _type_legend(ax, types_present):
+    handles = [
+        Patch(facecolor=TYPE_COLORS[t], label=t)
+        for t in ("Payant", "Naturel", "Direct")
+        if t in types_present
+    ]
+    ax.legend(handles=handles, loc="lower right", frameon=False, fontsize=9)
+
+
 def chart_channels(channels):
-    top = channels.sort_values("revenue", ascending=False).head(10).iloc[::-1]
+    top = channels.sort_values("revenue", ascending=False).iloc[::-1]
+    colors = [TYPE_COLORS.get(t, COLORS["bar"]) for t in top["channel_type"]]
     fig, ax = plt.subplots(figsize=(9, 4.5))
-    ax.barh(top["channel"], top["revenue"], color=COLORS["bar"])
+    bars = ax.barh(top["channel"], top["revenue"], color=colors)
     ax.set_xlabel("Chiffre d'affaires ($)")
-    ax.set_title("Top 10 canaux marketing par chiffre d'affaires")
+    ax.set_title("Chiffre d'affaires par canal d'acquisition")
+    # Plain "$120k" ticks instead of matplotlib's 1e6 offset notation.
+    ax.xaxis.set_major_formatter(FuncFormatter(lambda v, _: f"${v/1000:,.0f}k"))
+    ax.bar_label(bars, labels=[f"${v/1000:,.0f}k" for v in top["revenue"]],
+                 padding=4, fontsize=9, color=COLORS["muted"])
+    ax.set_xlim(0, top["revenue"].max() * 1.18)
+    _type_legend(ax, set(top["channel_type"]))
     fig.tight_layout()
     return fig_to_base64(fig)
 
 
 def chart_channel_conversion(channels):
-    top = channels[channels["sessions"] >= 100].sort_values("conversion_rate_pct", ascending=False).head(10).iloc[::-1]
+    top = channels[channels["sessions"] >= 100].sort_values("conversion_rate_pct").copy()
+    colors = [TYPE_COLORS.get(t, COLORS["bar2"]) for t in top["channel_type"]]
     fig, ax = plt.subplots(figsize=(9, 4.5))
-    ax.barh(top["channel"], top["conversion_rate_pct"], color=COLORS["bar2"])
+    bars = ax.barh(top["channel"], top["conversion_rate_pct"], color=colors)
     ax.set_xlabel("Taux de conversion (%)")
-    ax.set_title("Top 10 canaux par taux de conversion (>= 100 sessions)")
+    ax.set_title("Taux de conversion par canal (>= 100 sessions)")
+    ax.bar_label(bars, labels=[f"{v:.2f}%" for v in top["conversion_rate_pct"]],
+                 padding=4, fontsize=9, color=COLORS["muted"])
+    ax.set_xlim(0, top["conversion_rate_pct"].max() * 1.18)
+    _type_legend(ax, set(top["channel_type"]))
     fig.tight_layout()
     return fig_to_base64(fig)
 
@@ -165,7 +197,9 @@ def main():
 
     best_month = monthly.loc[monthly["orders"].idxmax()]
     top_channel = channels.iloc[0]
-    top_conv_channel = channels[channels["sessions"] >= 100].sort_values("conversion_rate_pct", ascending=False).iloc[0]
+    significant = channels[channels["sessions"] >= 100].sort_values("conversion_rate_pct", ascending=False)
+    top_conv_channel = significant.iloc[0]
+    worst_channel = significant.iloc[-1]
 
     # ---- charts --------------------------------------------------------
     img_sessions_orders = chart_sessions_orders(monthly)
@@ -174,10 +208,44 @@ def main():
     img_channels = chart_channels(channels)
     img_channel_conv = chart_channel_conversion(channels)
 
+    # ---- channel mix by acquisition type -------------------------------
+    by_type = (
+        channels.groupby("channel_type")[["sessions", "orders", "revenue"]]
+        .sum()
+        .reindex(["Payant", "Naturel", "Direct"])
+        .dropna(how="all")
+    )
+    by_type["share_revenue_pct"] = by_type["revenue"] / by_type["revenue"].sum() * 100
+    by_type["conversion_rate_pct"] = by_type["orders"] / by_type["sessions"] * 100
+
+    paid_share = by_type.loc["Payant", "share_revenue_pct"] if "Payant" in by_type.index else 0.0
+    free_share = 100 - paid_share
+
     table_channels = build_table(
-        channels,
-        columns=["channel", "sessions", "orders", "conversion_rate_pct", "revenue", "revenue_per_session_usd"],
-        max_rows=15,
+        channels.rename(columns={
+            "channel": "Canal",
+            "channel_type": "Type",
+            "sessions": "Sessions",
+            "orders": "Commandes",
+            "conversion_rate_pct": "Conv. %",
+            "revenue": "CA ($)",
+            "revenue_per_session_usd": "CA / session ($)",
+        }),
+        columns=["Canal", "Type", "Sessions", "Commandes", "Conv. %", "CA ($)", "CA / session ($)"],
+        max_rows=20,
+    )
+
+    table_types = build_table(
+        by_type.reset_index().rename(columns={
+            "channel_type": "Type",
+            "sessions": "Sessions",
+            "orders": "Commandes",
+            "revenue": "CA ($)",
+            "share_revenue_pct": "Part du CA (%)",
+            "conversion_rate_pct": "Conv. %",
+        }),
+        columns=["Type", "Sessions", "Commandes", "Conv. %", "CA ($)", "Part du CA (%)"],
+        max_rows=5,
     )
 
     trend_direction_sessions = "en hausse" if sessions_growth >= 0 else "en baisse"
@@ -207,8 +275,10 @@ def main():
     --accent-soft: #FFE7E0;
     --teal: #2FB8AC;
     --teal-soft: #DDF4F1;
+    --teal-ink: #10756C;
     --amber: #FFC145;
     --amber-soft: #FFF2D9;
+    --amber-ink: #8A5D00;
     --shadow: 0 1px 2px rgba(27, 31, 59, 0.05), 0 8px 24px -16px rgba(27, 31, 59, 0.18);
   }}
   @media (prefers-color-scheme: dark) {{
@@ -241,8 +311,10 @@ def main():
     --accent-soft: #3A2620;
     --teal: #4ED0C3;
     --teal-soft: #17332F;
+    --teal-ink: #7EE0D5;
     --amber: #FFCE6B;
     --amber-soft: #362B14;
+    --amber-ink: #FFD98A;
     --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 12px 28px -18px rgba(0,0,0,0.6);
   }}
 
@@ -384,6 +456,27 @@ def main():
   .charts-row {{ display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }}
   @media (max-width: 760px) {{ .charts-row {{ grid-template-columns: 1fr; }} }}
 
+  .tag {{
+    display: inline-block;
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 999px;
+    vertical-align: 1px;
+  }}
+  .tag-paid {{ background: var(--accent-soft); color: var(--accent-ink); }}
+  .tag-organic {{ background: var(--teal-soft); color: var(--teal-ink); }}
+  .tag-direct {{ background: var(--amber-soft); color: var(--amber-ink); }}
+  code {{
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 0.88em;
+    background: var(--surface-raised);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 1px 5px;
+  }}
+
   .table-wrap {{ overflow-x: auto; margin-top: 18px; border: 1px solid var(--border); border-radius: 12px; }}
   table.data-table {{ width: 100%; border-collapse: collapse; font-size: 13.5px; min-width: 560px; }}
   table.data-table th, table.data-table td {{
@@ -473,17 +566,45 @@ def main():
     <div class="kicker"><span class="num">03</span></div>
     <h2>Performance des canaux marketing</h2>
     <p class="question">Quels canaux marketing ont ete les plus performants ?</p>
-    <div class="charts-row">
-      <div class="chart"><img src="data:image/png;base64,{img_channels}" alt="CA par canal"></div>
-      <div class="chart"><img src="data:image/png;base64,{img_channel_conv}" alt="Conversion par canal"></div>
-    </div>
+
     <p class="answer">
-      Le canal generant le plus de chiffre d'affaires est <strong>{top_channel['channel']}</strong>
-      (${top_channel['revenue']:,.0f}, {int(top_channel['orders']):,} commandes,
-      {top_channel['conversion_rate_pct']}% de conversion).
-      En termes d'efficacite (canaux avec au moins 100 sessions), le meilleur taux de conversion
-      revient a <strong>{top_conv_channel['channel']}</strong> avec {top_conv_channel['conversion_rate_pct']}%.
+      Chaque session est rattachee a un seul type d'acquisition :
+      <span class="tag tag-paid">Payant</span> une campagne balisee (parametres <code>utm</code>),
+      <span class="tag tag-organic">Naturel</span> une arrivee depuis un moteur de recherche sans campagne,
+      <span class="tag tag-direct">Direct</span> une saisie directe de l'adresse, sans referent.
     </p>
+
+    <div class="table-wrap">
+      {table_types}
+    </div>
+
+    <div class="charts-row">
+      <div class="chart"><img src="data:image/png;base64,{img_channels}" alt="Chiffre d'affaires par canal d'acquisition"></div>
+      <div class="chart"><img src="data:image/png;base64,{img_channel_conv}" alt="Taux de conversion par canal"></div>
+    </div>
+
+    <p class="answer">
+      <strong>En volume</strong>, le canal dominant est <strong>{top_channel['channel']}</strong> :
+      ${top_channel['revenue']:,.0f} de chiffre d'affaires ({int(top_channel['orders']):,} commandes,
+      {top_channel['conversion_rate_pct']}% de conversion). Le trafic paye pese
+      <strong>{paid_share:.0f}%</strong> du chiffre d'affaires, contre <strong>{free_share:.0f}%</strong>
+      pour le trafic gratuit (naturel + direct).
+    </p>
+    <p class="answer">
+      <strong>En efficacite</strong>, le classement change : le meilleur taux de conversion revient a
+      <strong>{top_conv_channel['channel']}</strong> ({top_conv_channel['conversion_rate_pct']}%),
+      soit {top_conv_channel['conversion_rate_pct'] / top_channel['conversion_rate_pct']:.1f}x celui du canal
+      le plus gros. Le canal qui rapporte le plus n'est donc pas celui qui convertit le mieux : les volumes
+      viennent de campagnes d'acquisition sur mots-cles generiques, peu qualifiees, alors que les visiteurs
+      qui connaissent deja la boutique (naturel, direct, campagnes de marque) achetent nettement plus souvent.
+    </p>
+    <p class="answer">
+      Point d'attention : <strong>{worst_channel['channel']}</strong> ne convertit qu'a
+      <strong>{worst_channel['conversion_rate_pct']}%</strong> pour
+      ${worst_channel['revenue_per_session_usd']:.2f} de chiffre d'affaires par session, loin derriere
+      tous les autres canaux. Ce budget rapporte peu et gagnerait a etre reoriente.
+    </p>
+
     <div class="table-wrap">
       {table_channels}
     </div>
